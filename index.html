@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Run Tracker • Google Maps</title>
+  <!--
+    Live route tracker for running using Google Maps JavaScript API + Geolocation API.
+    Shows: distance (km), time, pace (min/km), and elevation (m).
+
+    IMPORTANT:
+    1) Serve over HTTPS (required for precise geolocation on most browsers).
+    2) Replace YOUR_API_KEY below with your Google Maps JavaScript API key.
+       Include the Geometry library for accurate distance calculations.
+    3) This demo uses ElevationService client‑side to get the current elevation.
+       Requests are throttled to reduce quota usage.
+  -->
+  <style>
+    :root{
+      --bg:#0b1221; --ink:#e5e7eb; --muted:#94a3b8; --line:#1f2937;
+      --primary:#3b82f6; --ok:#16a34a; --warn:#f59e0b; --bad:#ef4444; --card:#111827;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; background:var(--bg); color:var(--ink)}
+    .app{display:grid; grid-template-rows:auto auto 1fr; gap:12px; height:100%;}
+    header{padding:12px 16px; border-bottom:1px solid var(--line);}
+    header h1{margin:0; font-size:18px; font-weight:600; letter-spacing:.3px}
+    .controls{display:flex; flex-wrap:wrap; gap:8px; padding:0 16px}
+    button{appearance:none; border:1px solid #1f2937; background:#0f172a; color:var(--ink); padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600}
+    button:hover{filter:brightness(1.1)}
+    button.primary{background:var(--primary); border-color:#1d4ed8}
+    button.danger{background:#111827; border-color:#374151; color:#fca5a5}
+    button:disabled{opacity:.5; cursor:not-allowed}
+
+    .panel{margin:0 16px; border:1px solid var(--line); background:var(--card); border-radius:14px; padding:12px}
+    .stats{display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:10px}
+    .stat{background:#0b1221; border:1px solid var(--line); border-radius:12px; padding:10px}
+    .stat .label{font-size:12px; color:var(--muted)}
+    .stat .value{font-size:20px; font-weight:700; margin-top:2px}
+    .pill{display:inline-flex; align-items:center; gap:6px; background:#0b1221; border:1px solid var(--line); border-radius:999px; padding:6px 10px; font-size:12px; color:var(--muted)}
+
+    #map{width:100%; height:100%;}
+    .mapWrap{min-height:320px; height:100%; border-top:1px solid var(--line)}
+
+    .foot{padding:8px 16px; color:var(--muted); font-size:12px}
+    .hint{color:var(--muted); font-size:12px; margin-top:8px}
+
+    @media (max-width:720px){
+      .stats{grid-template-columns:repeat(2, minmax(0,1fr))}
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Live Run Tracker</h1>
+      <div class="hint">Izinkan akses lokasi. Untuk akurasi terbaik, aktifkan GPS di luar ruangan.</div>
+    </header>
+
+    <div class="controls">
+      <button id="btnStart" class="primary">Mulai</button>
+      <button id="btnPause" disabled>Jeda</button>
+      <button id="btnResume" disabled>Lanjut</button>
+      <button id="btnReset" class="danger" disabled>Reset</button>
+      <span class="pill" id="statusPill">Status: siap</span>
+      <span class="pill" id="autoPanPill" role="button" tabindex="0">Autopan: ON</span>
+    </div>
+
+    <section class="panel">
+      <div class="stats">
+        <div class="stat"><div class="label">Waktu</div><div class="value" id="time">00:00:00</div></div>
+        <div class="stat"><div class="label">Jarak (km)</div><div class="value" id="distance">0.00</div></div>
+        <div class="stat"><div class="label">Pace (min/km)</div><div class="value" id="pace">—</div></div>
+        <div class="stat"><div class="label">Elevasi (m)</div><div class="value" id="elev">—</div></div>
+        <div class="stat"><div class="label">Akurasi GPS (m)</div><div class="value" id="acc">—</div></div>
+      </div>
+    </section>
+
+    <div class="mapWrap"><div id="map"></div></div>
+
+    <div class="foot">Made for runners. Data hanya tersimpan di perangkat Anda (in‑memory).</div>
+  </div>
+
+  <script>
+    // ====== State ======
+    let map, polyline, currentMarker, elevSvc;
+    let path = [];
+    let watchId = null;
+    let started = false;
+    let startTime = null; // epoch ms
+    let elapsedMs = 0;    // accumulated when paused
+    let tickTimer = null;
+    let totalDistanceMeters = 0;
+    let lastPoint = null;
+    let lastElevFetch = 0;
+    let lastElevation = null;
+    let autoPan = true;
+
+    // UI refs
+    const $ = sel => document.querySelector(sel);
+    const elTime = $('#time');
+    const elDist = $('#distance');
+    const elPace = $('#pace');
+    const elElev = $('#elev');
+    const elAcc  = $('#acc');
+    const pillStatus = $('#statusPill');
+    const pillAutoPan = $('#autoPanPill');
+    const btnStart = $('#btnStart');
+    const btnPause = $('#btnPause');
+    const btnResume = $('#btnResume');
+    const btnReset = $('#btnReset');
+
+    // ====== Helpers ======
+    function fmtTime(ms){
+      const s = Math.max(0, Math.floor(ms/1000));
+      const h = Math.floor(s/3600);
+      const m = Math.floor((s%3600)/60);
+      const sec = s%60;
+      return [h,m,sec].map(v=>String(v).padStart(2,'0')).join(':');
+    }
+    function fmtPace(ms, km){
+      if (!km || km <= 0) return '—';
+      const minPerKm = (ms/60000)/km; // minutes per km
+      const mm = Math.floor(minPerKm);
+      const ss = Math.round((minPerKm - mm)*60);
+      return `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+    }
+    function setStatus(text, tone = 'muted'){
+      pillStatus.textContent = `Status: ${text}`;
+      const color = tone==='bad'?'var(--bad)':tone==='warn'?'var(--warn)':tone==='ok'?'var(--ok)':'var(--muted)';
+      pillStatus.style.color = color;
+      pillStatus.style.borderColor = color;
+    }
+
+    function addPoint(latLng){
+      path.push(latLng);
+      polyline.setPath(path);
+      if(currentMarker) currentMarker.setPosition(latLng);
+      if(autoPan) map.panTo(latLng);
+    }
+
+    function updateStats(acc){
+      elTime.textContent = fmtTime(elapsedMs + (started ? (Date.now() - startTime) : 0));
+      elDist.textContent = (totalDistanceMeters/1000).toFixed(2);
+      elPace.textContent = fmtPace(elapsedMs + (started ? (Date.now() - startTime) : 0), totalDistanceMeters/1000);
+      elAcc.textContent = acc != null ? acc.toFixed(0) : '—';
+      elElev.textContent = lastElevation != null ? lastElevation.toFixed(0) : '—';
+    }
+
+    function startTick(){
+      if(tickTimer) clearInterval(tickTimer);
+      tickTimer = setInterval(()=>updateStats(), 1000);
+    }
+    function stopTick(){ if(tickTimer){ clearInterval(tickTimer); tickTimer = null; } }
+
+    function handlePosition(pos){
+      const { latitude, longitude, accuracy } = pos.coords;
+      const latLng = new google.maps.LatLng(latitude, longitude);
+
+      // Initialize map on first fix
+      if(!map){
+        map = new google.maps.Map(document.getElementById('map'),{
+          center: latLng,
+          zoom: 17,
+          mapId: 'DEMO_MAP_ID' // optional; customize if you have a MapID
+        });
+        polyline = new google.maps.Polyline({
+          map,
+          path: [],
+          strokeColor: '#22d3ee',
+          strokeOpacity: 1,
+          strokeWeight: 5
+        });
+        currentMarker = new google.maps.Marker({ map, position: latLng, title: 'Posisi Anda' });
+        elevSvc = new google.maps.ElevationService();
+      }
+
+      // Filter low-quality points
+      if(accuracy && accuracy > 50){
+        setStatus(`akurasi buruk (${accuracy.toFixed(0)}m)`, 'warn');
+      } else {
+        setStatus('tracking', 'ok');
+      }
+
+      if(lastPoint){
+        const d = google.maps.geometry.spherical.computeDistanceBetween(lastPoint, latLng); // meters
+        // Discard tiny jitter (<= 2m) and huge jumps likely due to GPS glitches (>= 100m in one tick)
+        if(d > 2 && d < 100){
+          totalDistanceMeters += d;
+          addPoint(latLng);
+        } else {
+          // still move marker and center for visual continuity
+          if(currentMarker) currentMarker.setPosition(latLng);
+          if(autoPan) map.panTo(latLng);
+        }
+      } else {
+        addPoint(latLng);
+      }
+
+      lastPoint = latLng;
+      updateStats(accuracy);
+
+      // Throttled elevation fetch (every 3s max)
+      const now = Date.now();
+      if(now - lastElevFetch > 3000 && elevSvc){
+        lastElevFetch = now;
+        elevSvc.getElevationForLocations({ locations: [latLng] }, (results, status) => {
+          if(status === 'OK' && results && results[0]){
+            lastElevation = results[0].elevation; // meters
+            elElev.textContent = lastElevation.toFixed(0);
+          }
+        });
+      }
+    }
+
+    function onGeoError(err){
+      setStatus(`gps error: ${err.message}`, 'bad');
+    }
+
+    function startWatch(){
+      if(watchId != null) return;
+      if(!navigator.geolocation){ setStatus('Geolocation tidak didukung', 'bad'); return; }
+      const opts = { enableHighAccuracy:true, maximumAge:1000, timeout:15000 };
+      watchId = navigator.geolocation.watchPosition(handlePosition, onGeoError, opts);
+      setStatus('meminta lokasi…');
+    }
+    function stopWatch(){
+      if(watchId != null){ navigator.geolocation.clearWatch(watchId); watchId = null; }
+    }
+
+    // ====== Controls ======
+    btnStart.addEventListener('click', ()=>{
+      if(started) return;
+      started = true;
+      startTime = Date.now();
+      startWatch();
+      startTick();
+      btnStart.disabled = true;
+      btnPause.disabled = false;
+      btnResume.disabled = true;
+      btnReset.disabled = false;
+    });
+
+    btnPause.addEventListener('click', ()=>{
+      if(!started) return;
+      // accumulate elapsed
+      elapsedMs += Date.now() - startTime;
+      started = false;
+      stopWatch();
+      stopTick();
+      setStatus('jeda');
+      btnPause.disabled = true;
+      btnResume.disabled = false;
+      btnStart.disabled = true;
+    });
+
+    btnResume.addEventListener('click', ()=>{
+      if(started) return;
+      started = true;
+      startTime = Date.now();
+      startWatch();
+      startTick();
+      setStatus('lanjut', 'ok');
+      btnPause.disabled = false;
+      btnResume.disabled = true;
+      btnStart.disabled = true;
+    });
+
+    btnReset.addEventListener('click', ()=>{
+      stopWatch();
+      stopTick();
+      // Reset all state
+      path = [];
+      if(polyline) polyline.setPath(path);
+      lastPoint = null;
+      started = false;
+      startTime = null;
+      elapsedMs = 0;
+      totalDistanceMeters = 0;
+      lastElevation = null;
+      elTime.textContent = '00:00:00';
+      elDist.textContent = '0.00';
+      elPace.textContent = '—';
+      elElev.textContent = '—';
+      elAcc.textContent = '—';
+      setStatus('siap');
+      btnStart.disabled = false;
+      btnPause.disabled = true;
+      btnResume.disabled = true;
+      btnReset.disabled = true;
+    });
+
+    pillAutoPan.addEventListener('click', ()=>{
+      autoPan = !autoPan;
+      pillAutoPan.textContent = `Autopan: ${autoPan? 'ON' : 'OFF'}`;
+    });
+
+    // ====== Google Maps init ======
+    window.initMap = function(){
+      // Map is lazily created on first GPS fix to center correctly
+      setStatus('siap');
+    }
+  </script>
+  <script
+    src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=geometry&callback=initMap"
+    async defer
+  ></script>
+</body>
+</html>
