@@ -162,8 +162,7 @@
       if(!map){
         map = new google.maps.Map(document.getElementById('map'),{
           center: latLng,
-          zoom: 17,
-          mapId: 'DEMO_MAP_ID' // optional; customize if you have a MapID
+          zoom: 17
         });
         polyline = new google.maps.Polyline({
           map,
@@ -301,9 +300,22 @@
       // Map is lazily created on first GPS fix to center correctly
       setStatus('siap');
     }
+  
+    // === Auth & loader error hooks (jelaskan error Maps ke UI) ===
+    window.gm_authFailure = function(){
+      setStatus('API key ditolak (cek billing & pembatasan key).', 'bad');
+    };
+    window.addEventListener('error', function(e){
+      var msg = (e && e.message) ? e.message : '';
+      if(msg.indexOf('Google Maps JavaScript API error') !== -1){
+        var m = msg.match(/error:\\s*(\\w+)/);
+        var code = m ? m[1] : 'unknown';
+        setStatus('Maps gagal dimuat: ' + code + ' — lihat Console.', 'bad');
+      }
+    });
   </script>
   <script
-    src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=geometry&callback=initMap"
+    src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=geometry&v=weekly&callback=initMap"
     async defer
   ></script>
 </body>
