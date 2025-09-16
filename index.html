@@ -3,27 +3,49 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Kamera → Foto → Unduh</title>
+  <title>Kamera + Filter → Foto → Unduh</title>
   <style>
     :root{ --bg:#0b1221; --ink:#e5e7eb; --muted:#94a3b8; --line:#1f2937; --accent:#3b82f6; }
-    *{box-sizing:border-box} body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:var(--ink)}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:var(--ink)}
     header{padding:12px 16px;border-bottom:1px solid var(--line)} h1{margin:0;font-size:18px}
     main{display:grid;gap:12px;padding:12px}
     .stage{display:grid;gap:8px;justify-items:center}
-    video,canvas,img{max-width:100%;border-radius:12px;border:1px solid var(--line);background:#000}
+    .view{position:relative;max-width:100%}
+    video,canvas,img{max-width:100%;border-radius:12px;border:1px solid var(--line);background:#000;display:block}
+    /* Mirror untuk kamera depan */
+    .mirror{ transform: scaleX(-1); }
+    /* Overlay vignette hanya untuk preview */
+    .vignette-overlay{
+      pointer-events:none; position:absolute; inset:0; border-radius:12px;
+      background: radial-gradient(ellipse at center, rgba(0,0,0,0) 50%, rgba(0,0,0,.35) 100%);
+      opacity:0; transition:opacity .2s ease;
+    }
+    .vignette-on .vignette-overlay{ opacity:1; }
+
     .controls{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
     button,a.btn{appearance:none;border:1px solid var(--line);background:#0f172a;color:var(--ink);padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer;text-decoration:none}
     button.primary{background:var(--accent);border-color:#1d4ed8}
     button:disabled,a.btn[aria-disabled="true"]{opacity:.5;cursor:not-allowed}
     .hint{color:var(--muted);font-size:12px;text-align:center}
+
+    .filters{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+    .filters .chip{
+      padding:8px 12px;border-radius:999px;border:1px solid var(--line);cursor:pointer;background:#0b1324;color:var(--ink);font-size:13px
+    }
+    .filters .chip.active{background:var(--accent);border-color:#1d4ed8}
+
     .fallback{border:1px dashed var(--line);border-radius:10px;padding:10px;text-align:center}
   </style>
 </head>
 <body>
-  <header><h1>Kamera → Foto → Unduh</h1></header>
+  <header><h1>Kamera + Filter → Foto → Unduh</h1></header>
   <main>
     <div class="stage">
-      <video id="video" autoplay playsinline muted></video>
+      <div id="previewWrap" class="view">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="vignette-overlay" aria-hidden="true"></div>
+      </div>
       <canvas id="canvas" hidden></canvas>
       <img id="photo" alt="Hasil foto" hidden />
     </div>
@@ -36,7 +58,11 @@
       <a id="btnDownload" class="btn" aria-disabled="true" download>Unduh Foto</a>
     </div>
 
-    <p class="hint">Catatan: butuh HTTPS dan izin kamera. Di iPhone/iPad Safari, pastikan “Camera” diizinkan.</p>
+    <div class="filters" id="filters">
+      <!-- chip filter di-generate via JS -->
+    </div>
+
+    <p class="hint">Butuh HTTPS atau http://localhost. Izinkan akses kamera. Kamera depan tampil mirror, hasil foto depan juga mirror.</p>
 
     <div class="fallback">
       <div class="hint">Fallback jika kamera web tidak tersedia:</div>
@@ -48,6 +74,7 @@
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
   const photo  = document.getElementById('photo');
+  const previewWrap = document.getElementById('previewWrap');
 
   const btnStart = document.getElementById('btnStart');
   const btnSwitch = document.getElementById('btnSwitch');
@@ -56,9 +83,62 @@
   const btnDownload = document.getElementById('btnDownload');
   const fileInput = document.getElementById('fileInput');
 
+  const filtersWrap = document.getElementById('filters');
+
   let stream = null;
   let facing = 'environment'; // 'environment' | 'user'
   let lastBlobUrl = null;
+
+  // Katalog filter: css = string untuk CSS filter (preview & canvas)
+  // optional: vignette = true menyalakan overlay & menggambar vignette saat capture
+  const FILTERS = {
+    none:       { label:'Normal',        css:'none',                                      vignette:false },
+    grayscale:  { label:'Grayscale',     css:'grayscale(1)',                              vignette:false },
+    sepia:      { label:'Sepia',         css:'sepia(1) saturate(0.8)',                    vignette:false },
+    noir:       { label:'Noir',          css:'grayscale(1) contrast(1.35) brightness(0.9)', vignette:false },
+    vivid:      { label:'Vivid',         css:'saturate(1.6) contrast(1.05)',              vignette:false },
+    warm:       { label:'Warm',          css:'sepia(0.25) saturate(1.2) hue-rotate(-10deg) brightness(1.05)', vignette:false },
+    cool:       { label:'Cool',          css:'hue-rotate(10deg) saturate(1.1)',           vignette:false },
+    highcon:    { label:'High Contrast', css:'contrast(1.5) brightness(1.05)',            vignette:false },
+    pastel:     { label:'Pastel',        css:'saturate(0.7) brightness(1.1) contrast(0.95)', vignette:false },
+    blur:       { label:'Blur',          css:'blur(1.2px) saturate(1.05)',                 vignette:false },
+    vignette:   { label:'Vignette',      css:'contrast(1.05) brightness(0.98)',           vignette:true }
+  };
+  let currentFilterKey = 'none';
+
+  function buildFilterChips(){
+    filtersWrap.innerHTML = '';
+    Object.entries(FILTERS).forEach(([key, f])=>{
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip' + (key===currentFilterKey ? ' active':'');
+      chip.textContent = f.label;
+      chip.addEventListener('click', ()=>{
+        currentFilterKey = key;
+        updateFilterUI();
+      });
+      filtersWrap.appendChild(chip);
+    });
+    updateFilterUI();
+  }
+
+  function updateFilterUI(){
+    // Tandai chip aktif
+    [...filtersWrap.children].forEach((c,i)=>{
+      const key = Object.keys(FILTERS)[i];
+      c.classList.toggle('active', key===currentFilterKey);
+    });
+    const f = FILTERS[currentFilterKey];
+    // Terapkan filter ke preview video
+    video.style.filter = f.css || 'none';
+    // Vignette overlay untuk preview
+    previewWrap.classList.toggle('vignette-on', !!f.vignette);
+  }
+
+  function setPreviewMirror(){
+    if(facing === 'user') video.classList.add('mirror');
+    else video.classList.remove('mirror');
+  }
 
   function setDownload(blob){
     if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
@@ -78,11 +158,12 @@
     try{
       stream = await navigator.mediaDevices.getUserMedia(exactPref);
     }catch(_){
-      // fallback kalau exact tidak tersedia
       stream = await navigator.mediaDevices.getUserMedia(softPref);
     }
     video.srcObject = stream;
     await video.play().catch(()=>{});
+    setPreviewMirror();
+    updateFilterUI();
     btnSwitch.disabled = false;
     btnShot.disabled = false;
   }
@@ -97,18 +178,28 @@
   function showLive(){
     photo.hidden = true;
     canvas.hidden = true;
-    video.hidden = false;
+    previewWrap.hidden = false;
     btnShot.disabled = false;
     btnRetake.disabled = true;
     btnDownload.setAttribute('aria-disabled','true');
   }
 
   function showPhoto(){
-    video.hidden = true;
-    canvas.hidden = true; // tidak perlu ditampilkan
+    previewWrap.hidden = true;
+    canvas.hidden = true; // tidak perlu tampil
     photo.hidden = false;
     btnShot.disabled = true;
     btnRetake.disabled = false;
+  }
+
+  function drawVignette(ctx, w, h){
+    const g = ctx.createRadialGradient(w/2, h/2, Math.min(w,h)*0.45, w/2, h/2, Math.max(w,h)*0.65);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.save();
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,w,h);
+    ctx.restore();
   }
 
   function captureFrame(){
@@ -118,13 +209,27 @@
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, w, h);
+    const filt = FILTERS[currentFilterKey];
 
-    // Simpan ke JPEG dan aktifkan unduh
+    ctx.save();
+    // Mirror untuk kamera depan
+    if(facing === 'user'){
+      ctx.translate(w, 0);
+      ctx.scale(-1, 1);
+    }
+    // Terapkan CSS-like filter di canvas 2D
+    ctx.filter = filt.css || 'none';
+    ctx.drawImage(video, 0, 0, w, h);
+    ctx.restore();
+
+    // Tambahan pasca-gambar
+    if(filt.vignette){
+      drawVignette(ctx, w, h);
+    }
+
     canvas.toBlob((blob)=>{
       if(!blob) return;
       setDownload(blob);
-      // Preview
       const url = URL.createObjectURL(blob);
       photo.src = url;
       showPhoto();
@@ -162,18 +267,20 @@
     if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
   });
 
-  // Fallback: ambil dari input file lalu sediakan unduhan lagi (passthrough)
+  // Fallback: unggah gambar lalu bisa diunduh (tanpa filter; jika mau difilter, bisa ditambahkan logika serupa)
   fileInput.addEventListener('change', ()=>{
     const file = fileInput.files && fileInput.files[0];
     if(!file) return;
     const url = URL.createObjectURL(file);
     photo.src = url;
     showPhoto();
-    // Pastikan bisa diunduh ulang dengan nama seragam
     btnDownload.href = url;
     btnDownload.download = `foto-upload-${filenameFromNow()}.jpg`;
     btnDownload.setAttribute('aria-disabled','false');
   });
+
+  // build filter UI
+  buildFilterChips();
   </script>
 </body>
 </html>
