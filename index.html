@@ -2,321 +2,178 @@
 <html lang="id">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Live Run Tracker • Google Maps</title>
-  <!--
-    Live route tracker for running using Google Maps JavaScript API + Geolocation API.
-    Shows: distance (km), time, pace (min/km), and elevation (m).
-
-    IMPORTANT:
-    1) Serve over HTTPS (required for precise geolocation on most browsers).
-    2) Replace YOUR_API_KEY below with your Google Maps JavaScript API key.
-       Include the Geometry library for accurate distance calculations.
-    3) This demo uses ElevationService client‑side to get the current elevation.
-       Requests are throttled to reduce quota usage.
-  -->
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Kamera → Foto → Unduh</title>
   <style>
-    :root{
-      --bg:#0b1221; --ink:#e5e7eb; --muted:#94a3b8; --line:#1f2937;
-      --primary:#3b82f6; --ok:#16a34a; --warn:#f59e0b; --bad:#ef4444; --card:#111827;
-    }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; background:var(--bg); color:var(--ink)}
-    .app{display:grid; grid-template-rows:auto auto 1fr; gap:12px; height:100%;}
-    header{padding:12px 16px; border-bottom:1px solid var(--line);}
-    header h1{margin:0; font-size:18px; font-weight:600; letter-spacing:.3px}
-    .controls{display:flex; flex-wrap:wrap; gap:8px; padding:0 16px}
-    button{appearance:none; border:1px solid #1f2937; background:#0f172a; color:var(--ink); padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600}
-    button:hover{filter:brightness(1.1)}
-    button.primary{background:var(--primary); border-color:#1d4ed8}
-    button.danger{background:#111827; border-color:#374151; color:#fca5a5}
-    button:disabled{opacity:.5; cursor:not-allowed}
-
-    .panel{margin:0 16px; border:1px solid var(--line); background:var(--card); border-radius:14px; padding:12px}
-    .stats{display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:10px}
-    .stat{background:#0b1221; border:1px solid var(--line); border-radius:12px; padding:10px}
-    .stat .label{font-size:12px; color:var(--muted)}
-    .stat .value{font-size:20px; font-weight:700; margin-top:2px}
-    .pill{display:inline-flex; align-items:center; gap:6px; background:#0b1221; border:1px solid var(--line); border-radius:999px; padding:6px 10px; font-size:12px; color:var(--muted)}
-
-    #map{width:100%; height:100%;}
-    .mapWrap{min-height:320px; height:100%; border-top:1px solid var(--line)}
-
-    .foot{padding:8px 16px; color:var(--muted); font-size:12px}
-    .hint{color:var(--muted); font-size:12px; margin-top:8px}
-
-    @media (max-width:720px){
-      .stats{grid-template-columns:repeat(2, minmax(0,1fr))}
-    }
+    :root{ --bg:#0b1221; --ink:#e5e7eb; --muted:#94a3b8; --line:#1f2937; --accent:#3b82f6; }
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:var(--ink)}
+    header{padding:12px 16px;border-bottom:1px solid var(--line)} h1{margin:0;font-size:18px}
+    main{display:grid;gap:12px;padding:12px}
+    .stage{display:grid;gap:8px;justify-items:center}
+    video,canvas,img{max-width:100%;border-radius:12px;border:1px solid var(--line);background:#000}
+    .controls{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+    button,a.btn{appearance:none;border:1px solid var(--line);background:#0f172a;color:var(--ink);padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer;text-decoration:none}
+    button.primary{background:var(--accent);border-color:#1d4ed8}
+    button:disabled,a.btn[aria-disabled="true"]{opacity:.5;cursor:not-allowed}
+    .hint{color:var(--muted);font-size:12px;text-align:center}
+    .fallback{border:1px dashed var(--line);border-radius:10px;padding:10px;text-align:center}
   </style>
 </head>
 <body>
-  <div class="app">
-    <header>
-      <h1>Live Run Tracker</h1>
-      <div class="hint">Izinkan akses lokasi. Untuk akurasi terbaik, aktifkan GPS di luar ruangan.</div>
-    </header>
-
-    <div class="controls">
-      <button id="btnStart" class="primary">Mulai</button>
-      <button id="btnPause" disabled>Jeda</button>
-      <button id="btnResume" disabled>Lanjut</button>
-      <button id="btnReset" class="danger" disabled>Reset</button>
-      <span class="pill" id="statusPill">Status: siap</span>
-      <span class="pill" id="autoPanPill" role="button" tabindex="0">Autopan: ON</span>
+  <header><h1>Kamera → Foto → Unduh</h1></header>
+  <main>
+    <div class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas" hidden></canvas>
+      <img id="photo" alt="Hasil foto" hidden />
     </div>
 
-    <section class="panel">
-      <div class="stats">
-        <div class="stat"><div class="label">Waktu</div><div class="value" id="time">00:00:00</div></div>
-        <div class="stat"><div class="label">Jarak (km)</div><div class="value" id="distance">0.00</div></div>
-        <div class="stat"><div class="label">Pace (min/km)</div><div class="value" id="pace">—</div></div>
-        <div class="stat"><div class="label">Elevasi (m)</div><div class="value" id="elev">—</div></div>
-        <div class="stat"><div class="label">Akurasi GPS (m)</div><div class="value" id="acc">—</div></div>
-      </div>
-    </section>
+    <div class="controls">
+      <button id="btnStart" class="primary">Mulai Kamera</button>
+      <button id="btnSwitch" title="Ganti kamera (depan/belakang)" disabled>Ganti Kamera</button>
+      <button id="btnShot" disabled>Ambil Foto</button>
+      <button id="btnRetake" disabled>Ulangi</button>
+      <a id="btnDownload" class="btn" aria-disabled="true" download>Unduh Foto</a>
+    </div>
 
-    <div class="mapWrap"><div id="map"></div></div>
+    <p class="hint">Catatan: butuh HTTPS dan izin kamera. Di iPhone/iPad Safari, pastikan “Camera” diizinkan.</p>
 
-    <div class="foot">Made for runners. Data hanya tersimpan di perangkat Anda (in‑memory).</div>
-  </div>
+    <div class="fallback">
+      <div class="hint">Fallback jika kamera web tidak tersedia:</div>
+      <input id="fileInput" type="file" accept="image/*" capture="environment">
+    </div>
+  </main>
 
   <script>
-    // ====== State ======
-    let map, polyline, currentMarker, elevSvc;
-    let path = [];
-    let watchId = null;
-    let started = false;
-    let startTime = null; // epoch ms
-    let elapsedMs = 0;    // accumulated when paused
-    let tickTimer = null;
-    let totalDistanceMeters = 0;
-    let lastPoint = null;
-    let lastElevFetch = 0;
-    let lastElevation = null;
-    let autoPan = true;
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const photo  = document.getElementById('photo');
 
-    // UI refs
-    const $ = sel => document.querySelector(sel);
-    const elTime = $('#time');
-    const elDist = $('#distance');
-    const elPace = $('#pace');
-    const elElev = $('#elev');
-    const elAcc  = $('#acc');
-    const pillStatus = $('#statusPill');
-    const pillAutoPan = $('#autoPanPill');
-    const btnStart = $('#btnStart');
-    const btnPause = $('#btnPause');
-    const btnResume = $('#btnResume');
-    const btnReset = $('#btnReset');
+  const btnStart = document.getElementById('btnStart');
+  const btnSwitch = document.getElementById('btnSwitch');
+  const btnShot = document.getElementById('btnShot');
+  const btnRetake = document.getElementById('btnRetake');
+  const btnDownload = document.getElementById('btnDownload');
+  const fileInput = document.getElementById('fileInput');
 
-    // ====== Helpers ======
-    function fmtTime(ms){
-      const s = Math.max(0, Math.floor(ms/1000));
-      const h = Math.floor(s/3600);
-      const m = Math.floor((s%3600)/60);
-      const sec = s%60;
-      return [h,m,sec].map(v=>String(v).padStart(2,'0')).join(':');
+  let stream = null;
+  let facing = 'environment'; // 'environment' | 'user'
+  let lastBlobUrl = null;
+
+  function setDownload(blob){
+    if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+    lastBlobUrl = URL.createObjectURL(blob);
+    const ts = new Date().toISOString().replace(/[:.]/g,'-');
+    btnDownload.href = lastBlobUrl;
+    btnDownload.download = `foto-${ts}.jpg`;
+    btnDownload.setAttribute('aria-disabled','false');
+  }
+
+  async function startCamera(){
+    stopCamera();
+    const base = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    const exactPref = { video: { ...base, facingMode: { exact: facing } }, audio: false };
+    const softPref  = { video: { ...base, facingMode: facing }, audio: false };
+
+    try{
+      stream = await navigator.mediaDevices.getUserMedia(exactPref);
+    }catch(_){
+      // fallback kalau exact tidak tersedia
+      stream = await navigator.mediaDevices.getUserMedia(softPref);
     }
-    function fmtPace(ms, km){
-      if (!km || km <= 0) return '—';
-      const minPerKm = (ms/60000)/km; // minutes per km
-      const mm = Math.floor(minPerKm);
-      const ss = Math.round((minPerKm - mm)*60);
-      return `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+    video.srcObject = stream;
+    await video.play().catch(()=>{});
+    btnSwitch.disabled = false;
+    btnShot.disabled = false;
+  }
+
+  function stopCamera(){
+    if(stream){
+      stream.getTracks().forEach(t=>t.stop());
+      stream = null;
     }
-    function setStatus(text, tone = 'muted'){
-      pillStatus.textContent = `Status: ${text}`;
-      const color = tone==='bad'?'var(--bad)':tone==='warn'?'var(--warn)':tone==='ok'?'var(--ok)':'var(--muted)';
-      pillStatus.style.color = color;
-      pillStatus.style.borderColor = color;
+  }
+
+  function showLive(){
+    photo.hidden = true;
+    canvas.hidden = true;
+    video.hidden = false;
+    btnShot.disabled = false;
+    btnRetake.disabled = true;
+    btnDownload.setAttribute('aria-disabled','true');
+  }
+
+  function showPhoto(){
+    video.hidden = true;
+    canvas.hidden = true; // tidak perlu ditampilkan
+    photo.hidden = false;
+    btnShot.disabled = true;
+    btnRetake.disabled = false;
+  }
+
+  function captureFrame(){
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if(!w || !h){ return; }
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, w, h);
+
+    // Simpan ke JPEG dan aktifkan unduh
+    canvas.toBlob((blob)=>{
+      if(!blob) return;
+      setDownload(blob);
+      // Preview
+      const url = URL.createObjectURL(blob);
+      photo.src = url;
+      showPhoto();
+    }, 'image/jpeg', 0.95);
+  }
+
+  function filenameFromNow(){
+    return new Date().toISOString().replace(/[:.]/g,'-');
+  }
+
+  // Events
+  btnStart.addEventListener('click', async ()=>{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      alert('Browser tidak mendukung getUserMedia. Gunakan fallback input di bawah.');
+      return;
     }
+    await startCamera();
+    showLive();
+  });
 
-    function addPoint(latLng){
-      path.push(latLng);
-      polyline.setPath(path);
-      if(currentMarker) currentMarker.setPosition(latLng);
-      if(autoPan) map.panTo(latLng);
-    }
+  btnSwitch.addEventListener('click', async ()=>{
+    facing = (facing === 'environment') ? 'user' : 'environment';
+    await startCamera();
+    showLive();
+  });
 
-    function updateStats(acc){
-      elTime.textContent = fmtTime(elapsedMs + (started ? (Date.now() - startTime) : 0));
-      elDist.textContent = (totalDistanceMeters/1000).toFixed(2);
-      elPace.textContent = fmtPace(elapsedMs + (started ? (Date.now() - startTime) : 0), totalDistanceMeters/1000);
-      elAcc.textContent = acc != null ? acc.toFixed(0) : '—';
-      elElev.textContent = lastElevation != null ? lastElevation.toFixed(0) : '—';
-    }
+  btnShot.addEventListener('click', captureFrame);
 
-    function startTick(){
-      if(tickTimer) clearInterval(tickTimer);
-      tickTimer = setInterval(()=>updateStats(), 1000);
-    }
-    function stopTick(){ if(tickTimer){ clearInterval(tickTimer); tickTimer = null; } }
+  btnRetake.addEventListener('click', ()=>{
+    showLive();
+  });
 
-    function handlePosition(pos){
-      const { latitude, longitude, accuracy } = pos.coords;
-      const latLng = new google.maps.LatLng(latitude, longitude);
+  window.addEventListener('beforeunload', ()=>{
+    stopCamera();
+    if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+  });
 
-      // Initialize map on first fix
-      if(!map){
-        map = new google.maps.Map(document.getElementById('map'),{
-          center: latLng,
-          zoom: 17
-        });
-        polyline = new google.maps.Polyline({
-          map,
-          path: [],
-          strokeColor: '#22d3ee',
-          strokeOpacity: 1,
-          strokeWeight: 5
-        });
-        currentMarker = new google.maps.Marker({ map, position: latLng, title: 'Posisi Anda' });
-        elevSvc = new google.maps.ElevationService();
-      }
-
-      // Filter low-quality points
-      if(accuracy && accuracy > 50){
-        setStatus(`akurasi buruk (${accuracy.toFixed(0)}m)`, 'warn');
-      } else {
-        setStatus('tracking', 'ok');
-      }
-
-      if(lastPoint){
-        const d = google.maps.geometry.spherical.computeDistanceBetween(lastPoint, latLng); // meters
-        // Discard tiny jitter (<= 2m) and huge jumps likely due to GPS glitches (>= 100m in one tick)
-        if(d > 2 && d < 100){
-          totalDistanceMeters += d;
-          addPoint(latLng);
-        } else {
-          // still move marker and center for visual continuity
-          if(currentMarker) currentMarker.setPosition(latLng);
-          if(autoPan) map.panTo(latLng);
-        }
-      } else {
-        addPoint(latLng);
-      }
-
-      lastPoint = latLng;
-      updateStats(accuracy);
-
-      // Throttled elevation fetch (every 3s max)
-      const now = Date.now();
-      if(now - lastElevFetch > 3000 && elevSvc){
-        lastElevFetch = now;
-        elevSvc.getElevationForLocations({ locations: [latLng] }, (results, status) => {
-          if(status === 'OK' && results && results[0]){
-            lastElevation = results[0].elevation; // meters
-            elElev.textContent = lastElevation.toFixed(0);
-          }
-        });
-      }
-    }
-
-    function onGeoError(err){
-      setStatus(`gps error: ${err.message}`, 'bad');
-    }
-
-    function startWatch(){
-      if(watchId != null) return;
-      if(!navigator.geolocation){ setStatus('Geolocation tidak didukung', 'bad'); return; }
-      const opts = { enableHighAccuracy:true, maximumAge:1000, timeout:15000 };
-      watchId = navigator.geolocation.watchPosition(handlePosition, onGeoError, opts);
-      setStatus('meminta lokasi…');
-    }
-    function stopWatch(){
-      if(watchId != null){ navigator.geolocation.clearWatch(watchId); watchId = null; }
-    }
-
-    // ====== Controls ======
-    btnStart.addEventListener('click', ()=>{
-      if(started) return;
-      started = true;
-      startTime = Date.now();
-      startWatch();
-      startTick();
-      btnStart.disabled = true;
-      btnPause.disabled = false;
-      btnResume.disabled = true;
-      btnReset.disabled = false;
-    });
-
-    btnPause.addEventListener('click', ()=>{
-      if(!started) return;
-      // accumulate elapsed
-      elapsedMs += Date.now() - startTime;
-      started = false;
-      stopWatch();
-      stopTick();
-      setStatus('jeda');
-      btnPause.disabled = true;
-      btnResume.disabled = false;
-      btnStart.disabled = true;
-    });
-
-    btnResume.addEventListener('click', ()=>{
-      if(started) return;
-      started = true;
-      startTime = Date.now();
-      startWatch();
-      startTick();
-      setStatus('lanjut', 'ok');
-      btnPause.disabled = false;
-      btnResume.disabled = true;
-      btnStart.disabled = true;
-    });
-
-    btnReset.addEventListener('click', ()=>{
-      stopWatch();
-      stopTick();
-      // Reset all state
-      path = [];
-      if(polyline) polyline.setPath(path);
-      lastPoint = null;
-      started = false;
-      startTime = null;
-      elapsedMs = 0;
-      totalDistanceMeters = 0;
-      lastElevation = null;
-      elTime.textContent = '00:00:00';
-      elDist.textContent = '0.00';
-      elPace.textContent = '—';
-      elElev.textContent = '—';
-      elAcc.textContent = '—';
-      setStatus('siap');
-      btnStart.disabled = false;
-      btnPause.disabled = true;
-      btnResume.disabled = true;
-      btnReset.disabled = true;
-    });
-
-    pillAutoPan.addEventListener('click', ()=>{
-      autoPan = !autoPan;
-      pillAutoPan.textContent = `Autopan: ${autoPan? 'ON' : 'OFF'}`;
-    });
-
-    // ====== Google Maps init ======
-    window.initMap = function(){
-      // Map is lazily created on first GPS fix to center correctly
-      setStatus('siap');
-    }
-  
-    // === Auth & loader error hooks (jelaskan error Maps ke UI) ===
-    window.gm_authFailure = function(){
-      setStatus('API key ditolak (cek billing & pembatasan key).', 'bad');
-    };
-    window.addEventListener('error', function(e){
-      var msg = (e && e.message) ? e.message : '';
-      if(msg.indexOf('Google Maps JavaScript API error') !== -1){
-        var m = msg.match(/error:\\s*(\\w+)/);
-        var code = m ? m[1] : 'unknown';
-        setStatus('Maps gagal dimuat: ' + code + ' — lihat Console.', 'bad');
-      }
-    });
+  // Fallback: ambil dari input file lalu sediakan unduhan lagi (passthrough)
+  fileInput.addEventListener('change', ()=>{
+    const file = fileInput.files && fileInput.files[0];
+    if(!file) return;
+    const url = URL.createObjectURL(file);
+    photo.src = url;
+    showPhoto();
+    // Pastikan bisa diunduh ulang dengan nama seragam
+    btnDownload.href = url;
+    btnDownload.download = `foto-upload-${filenameFromNow()}.jpg`;
+    btnDownload.setAttribute('aria-disabled','false');
+  });
   </script>
-  <script
-    src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=geometry&v=weekly&callback=initMap"
-    async defer
-  ></script>
 </body>
 </html>
